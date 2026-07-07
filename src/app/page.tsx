@@ -1,65 +1,155 @@
-import Image from "next/image";
+"use client";
+
+import { useState } from "react";
+import { Beaker, Loader2, Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { ImageDropzone } from "@/components/dashboard/image-dropzone";
+import { DebugPanel } from "@/components/dashboard/debug-panel";
+import { ResultsPanel } from "@/components/dashboard/results-panel";
+import type { CamSolution, ExtractedCamProblem } from "@/types/cam";
+
+function extractDataUrlParts(dataUrl: string): { imageBase64: string; mimeType: string } {
+  const match = dataUrl.match(/^data:(.*?);base64,(.*)$/);
+  if (!match) {
+    return { imageBase64: dataUrl, mimeType: "image/png" };
+  }
+  return { mimeType: match[1], imageBase64: match[2] };
+}
 
 export default function Home() {
+  const [images, setImages] = useState<string[]>([]);
+  const [debugOpen, setDebugOpen] = useState(true);
+  const [rawInput, setRawInput] = useState("");
+  const [solution, setSolution] = useState<CamSolution | null>(null);
+  const [isSolving, setIsSolving] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+
+  const solveProblem = async (problem: ExtractedCamProblem): Promise<CamSolution> => {
+    const res = await fetch("/api/solve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(problem),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error ?? "Errore durante la risoluzione del problema.");
+    }
+    return data as CamSolution;
+  };
+
+  const handleSolve = async () => {
+    setIsSolving(true);
+    setError(null);
+    try {
+      const parsed = JSON.parse(rawInput);
+      const data = await solveProblem(parsed);
+      setSolution(data);
+    } catch (err) {
+      setSolution(null);
+      if (err instanceof SyntaxError) {
+        setError(
+          "Il testo incollato non è un JSON valido. Il pannello Debug accetta solo un JSON conforme a ExtractedCamProblem."
+        );
+      } else {
+        setError(err instanceof Error ? err.message : "Errore sconosciuto.");
+      }
+    } finally {
+      setIsSolving(false);
+    }
+  };
+
+  const handleAnalyze = async () => {
+    const lastImage = images[images.length - 1];
+    if (!lastImage) return;
+    setIsAnalyzing(true);
+    setAnalyzeError(null);
+    try {
+      const { imageBase64, mimeType } = extractDataUrlParts(lastImage);
+      const analyzeRes = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64, mimeType }),
+      });
+      const extracted = await analyzeRes.json();
+      if (!analyzeRes.ok) {
+        throw new Error(extracted.error ?? "Errore durante l'analisi dello screenshot.");
+      }
+      // Mostra nel pannello Debug il JSON estratto dall'AI, così l'utente può
+      // verificarlo o correggerlo manualmente prima di un nuovo tentativo.
+      setRawInput(JSON.stringify(extracted, null, 2));
+      const solved = await solveProblem(extracted as ExtractedCamProblem);
+      setSolution(solved);
+    } catch (err) {
+      setSolution(null);
+      setAnalyzeError(err instanceof Error ? err.message : "Errore sconosciuto durante l'analisi.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-zinc-50 dark:bg-black">
+      <header className="border-b bg-white dark:bg-black">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+          <div>
+            <h1 className="text-lg font-semibold">CAM Quiz Solver</h1>
+            <p className="text-sm text-muted-foreground">
+              Tornitura · Fresatura · Foratura — risoluzione passo-passo per i quiz d&apos;esame
+            </p>
+          </div>
+          <Button variant="outline" onClick={() => setDebugOpen(true)}>
+            <Beaker className="size-4" />
+            Debug
+          </Button>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+      </header>
+
+      <main className="mx-auto flex max-w-5xl flex-col gap-6 px-6 py-8">
+        <Card>
+          <CardHeader>
+            <CardTitle>1. Carica il problema</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <ImageDropzone images={images} onImagesChange={setImages} />
+            <Button
+              onClick={handleAnalyze}
+              disabled={images.length === 0 || isAnalyzing}
+              className="w-full sm:w-auto"
+            >
+              {isAnalyzing ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+              {isAnalyzing ? "Analisi in corso…" : "Analizza con AI"}
+            </Button>
+            {analyzeError && (
+              <Alert variant="destructive">
+                <AlertDescription>{analyzeError}</AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>2. Risultati</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResultsPanel solution={solution} />
+          </CardContent>
+        </Card>
       </main>
+
+      <DebugPanel
+        open={debugOpen}
+        onOpenChange={setDebugOpen}
+        rawInput={rawInput}
+        onRawInputChange={setRawInput}
+        onSolve={handleSolve}
+        isSolving={isSolving}
+        error={error}
+      />
     </div>
   );
 }
