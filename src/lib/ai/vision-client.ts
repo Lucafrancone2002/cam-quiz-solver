@@ -1,7 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { ExtractedCamProblem } from "@/types/cam";
-import { camExtractionJsonSchema } from "./vision-schema";
+import { camExtractionResponseSchema } from "./vision-schema";
 import { CAM_EXTRACTION_SYSTEM_PROMPT } from "./prompts";
 
 export interface VisionExtractionInput {
@@ -13,86 +12,32 @@ export interface VisionExtractionInput {
 const DEFAULT_USER_INSTRUCTION =
   "Estrai in formato JSON tutti i parametri CAM presenti in questo screenshot di un problema/quiz d'esame.";
 
-async function extractWithAnthropic(input: VisionExtractionInput): Promise<ExtractedCamProblem> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const model = process.env.ANTHROPIC_VISION_MODEL ?? "claude-3-5-sonnet-20241022";
-
-  const response = await client.messages.create({
-    model,
-    max_tokens: 4096,
-    system: CAM_EXTRACTION_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "image",
-            source: { type: "base64", media_type: input.mimeType as "image/png", data: input.imageBase64 },
-          },
-          { type: "text", text: input.extraText || DEFAULT_USER_INSTRUCTION },
-        ],
-      },
-    ],
-    tools: [
-      {
-        name: "extract_cam_problem",
-        description: "Registra i parametri CAM estratti dallo screenshot, seguendo esattamente lo schema fornito.",
-        input_schema: camExtractionJsonSchema.schema as Anthropic.Tool.InputSchema,
-      },
-    ],
-    tool_choice: { type: "tool", name: "extract_cam_problem" },
-  });
-
-  const toolUse = response.content.find((block) => block.type === "tool_use");
-  if (!toolUse || toolUse.type !== "tool_use") {
-    throw new Error("Il modello Anthropic non ha restituito un'estrazione strutturata.");
+// Google Gemini (gemini-1.5-flash) è gratuito entro i limiti della free tier,
+// quindi è l'unico provider usato dal Vision & AI Orchestrator Agent.
+export async function extractCamProblemFromImage(input: VisionExtractionInput): Promise<ExtractedCamProblem> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Nessuna chiave API configurata. Imposta GEMINI_API_KEY nelle variabili d'ambiente.");
   }
-  return toolUse.input as ExtractedCamProblem;
-}
 
-async function extractWithOpenAI(input: VisionExtractionInput): Promise<ExtractedCamProblem> {
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const model = process.env.OPENAI_VISION_MODEL ?? "gpt-4o";
-
-  const response = await client.chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: CAM_EXTRACTION_SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: input.extraText || DEFAULT_USER_INSTRUCTION },
-          { type: "image_url", image_url: { url: `data:${input.mimeType};base64,${input.imageBase64}` } },
-        ],
-      },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: camExtractionJsonSchema.name,
-        schema: camExtractionJsonSchema.schema,
-        strict: true,
-      },
+  const client = new GoogleGenerativeAI(apiKey);
+  const model = client.getGenerativeModel({
+    model: process.env.GEMINI_VISION_MODEL ?? "gemini-1.5-flash",
+    systemInstruction: CAM_EXTRACTION_SYSTEM_PROMPT,
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: camExtractionResponseSchema,
     },
   });
 
-  const content = response.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error("Il modello OpenAI non ha restituito un'estrazione strutturata.");
-  }
-  return JSON.parse(content) as ExtractedCamProblem;
-}
+  const result = await model.generateContent([
+    { inlineData: { mimeType: input.mimeType, data: input.imageBase64 } },
+    input.extraText || DEFAULT_USER_INSTRUCTION,
+  ]);
 
-// Sceglie automaticamente il provider in base alla chiave API configurata
-// nell'ambiente (Anthropic ha priorità se entrambe sono presenti).
-export async function extractCamProblemFromImage(input: VisionExtractionInput): Promise<ExtractedCamProblem> {
-  if (process.env.ANTHROPIC_API_KEY) {
-    return extractWithAnthropic(input);
+  const text = result.response.text();
+  if (!text) {
+    throw new Error("Il modello Gemini non ha restituito un'estrazione strutturata.");
   }
-  if (process.env.OPENAI_API_KEY) {
-    return extractWithOpenAI(input);
-  }
-  throw new Error(
-    "Nessuna chiave API configurata. Imposta ANTHROPIC_API_KEY o OPENAI_API_KEY nelle variabili d'ambiente."
-  );
+  return JSON.parse(text) as ExtractedCamProblem;
 }
