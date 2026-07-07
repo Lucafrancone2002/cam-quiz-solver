@@ -12,8 +12,11 @@ export interface VisionExtractionInput {
 const DEFAULT_USER_INSTRUCTION =
   "Estrai in formato JSON tutti i parametri CAM presenti in questo screenshot di un problema/quiz d'esame.";
 
-// Google Gemini (gemini-1.5-flash) è gratuito entro i limiti della free tier,
+// Google Gemini (gemini-2.5-flash) è gratuito entro i limiti della free tier,
 // quindi è l'unico provider usato dal Vision & AI Orchestrator Agent.
+// Nota: i modelli Gemini vengono ritirati periodicamente da Google (es.
+// gemini-1.5-flash non è più servito su v1beta) — se questo default smette di
+// funzionare, sovrascrivilo con GEMINI_VISION_MODEL senza toccare il codice.
 export async function extractCamProblemFromImage(input: VisionExtractionInput): Promise<ExtractedCamProblem> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -22,7 +25,7 @@ export async function extractCamProblemFromImage(input: VisionExtractionInput): 
 
   const client = new GoogleGenerativeAI(apiKey);
   const model = client.getGenerativeModel({
-    model: process.env.GEMINI_VISION_MODEL ?? "gemini-1.5-flash",
+    model: process.env.GEMINI_VISION_MODEL ?? "gemini-2.5-flash",
     systemInstruction: CAM_EXTRACTION_SYSTEM_PROMPT,
     generationConfig: {
       responseMimeType: "application/json",
